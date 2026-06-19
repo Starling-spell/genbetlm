@@ -1,0 +1,3 @@
+pytest
+genlayer-test
+genvm-linter
