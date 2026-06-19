@@ -99,10 +99,11 @@ export async function askGenLayer({
   });
 
   try {
-    // Adds + switches the wallet (Privy) to the GenLayer chain. Must run before
-    // writing or the SDK throws a wrong-chain error.
+    // Switch the wallet to the GenLayer chain ourselves (plain EVM switch) rather
+    // than client.connect(), which forces a MetaMask Snap that Privy/non-MetaMask
+    // wallets don't support. Must run before writing or the SDK throws wrong-chain.
     onPhase?.("connecting");
-    await client.connect(network as never);
+    await ensureWalletChain(provider, chain);
 
     // The write is signed by the user's wallet — Privy shows an approval popup.
     onPhase?.("approving");
@@ -145,6 +146,63 @@ export async function askGenLayer({
     return { txHash: String(txHash), answer: answerText, network };
   } catch (error) {
     throw new Error(humanizeGenLayerError(error));
+  }
+}
+
+type Eip1193 = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+
+// Switch the wallet to the GenLayer chain with a plain EVM chain switch.
+// We do NOT use genlayer-js `client.connect()` because it unconditionally calls
+// `wallet_getSnaps`/`wallet_requestSnaps` (a MetaMask Snap), which Privy embedded
+// wallets and non-MetaMask wallets don't implement ("wallet_getSnaps doesn't have
+// a corresponding handler"). The actual transaction is a normal eth_sendTransaction,
+// so a standard chain switch is all that's needed.
+async function ensureWalletChain(provider: unknown, chain: unknown): Promise<void> {
+  const eth = provider as Eip1193 | null;
+  const c = chain as {
+    id: number;
+    name: string;
+    nativeCurrency: { name: string; symbol: string; decimals: number };
+    rpcUrls: { default: { http: readonly string[] } };
+    blockExplorers?: { default: { url: string } };
+  };
+  if (!eth?.request) return;
+
+  const chainIdHex = `0x${c.id.toString(16)}`;
+  try {
+    if ((await eth.request({ method: "eth_chainId" })) === chainIdHex) return;
+  } catch {
+    // ignore and try to switch
+  }
+
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: chainIdHex }]
+    });
+  } catch (error) {
+    // 4902 = chain not added yet; some wallets surface -32603. Add then switch.
+    const code = (error as { code?: number })?.code;
+    if (code === 4902 || code === -32603 || code === undefined) {
+      await eth.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: chainIdHex,
+            chainName: c.name,
+            rpcUrls: c.rpcUrls.default.http,
+            nativeCurrency: c.nativeCurrency,
+            blockExplorerUrls: c.blockExplorers ? [c.blockExplorers.default.url] : []
+          }
+        ]
+      });
+      await eth.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: chainIdHex }]
+      });
+    } else {
+      throw error;
+    }
   }
 }
 
