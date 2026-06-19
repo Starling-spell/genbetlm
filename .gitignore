@@ -12,3 +12,10 @@ yarn-error.log*
 pnpm-debug.log*
 *.log
 *.tsbuildinfo
+
+# Local GenLayer reference projects (study material, not part of the app)
+pro/
+
+# Python bytecode cache from local contract checks
+__pycache__/
+*.pyc

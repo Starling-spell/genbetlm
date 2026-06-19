@@ -13,7 +13,12 @@ import {
   Wallet
 } from "lucide-react";
 import { VerdictLogo } from "@/components/verdict-logo";
-import { askGenLayer, getGenLayerConfig, type AskGenLayerPhase } from "@/lib/genlayer-client";
+import {
+  askGenLayer,
+  getGenLayerConfig,
+  getOnChainHistory,
+  type AskGenLayerPhase
+} from "@/lib/genlayer-client";
 import { formatUsd, shortAddress } from "@/lib/format";
 import type { WalletSnapshot } from "@/lib/types";
 
@@ -79,12 +84,18 @@ export function CryptoCopilot() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingWallet, setLoadingWallet] = useState(false);
+  const [memoryRestored, setMemoryRestored] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
+  const restoredForRef = useRef<string | null>(null);
 
-  const activeWallet = useMemo(
-    () => wallets.find((item) => item.walletClientType === "privy") ?? wallets[0] ?? null,
-    [wallets]
-  );
+  const activeWallet = useMemo(() => {
+    // Prefer a connected external wallet (e.g. MetaMask holding a GEN-funded
+    // account) over the auto-created Privy embedded wallet, which has no gas on
+    // studionet. Fall back to the embedded wallet if nothing external is linked.
+    const external = wallets.find((item) => item.walletClientType !== "privy");
+    const embedded = wallets.find((item) => item.walletClientType === "privy");
+    return external ?? embedded ?? wallets[0] ?? null;
+  }, [wallets]);
   const address = activeWallet?.address as `0x${string}` | undefined;
   const { contractAddress } = getGenLayerConfig();
   const configured = Boolean(contractAddress);
@@ -110,6 +121,23 @@ export function CryptoCopilot() {
       void loadWallet();
     }
   }, [ready, authenticated, walletsReady, address, loadWallet]);
+
+  // Restore the wallet's on-chain conversation memory once per address. Only
+  // seeds when the chat is empty, so it never clobbers an active conversation.
+  useEffect(() => {
+    if (!ready || !authenticated || !walletsReady || !address) return;
+    if (restoredForRef.current === address) return;
+    restoredForRef.current = address;
+    void getOnChainHistory(address).then((turns) => {
+      if (turns.length === 0) return;
+      setMessages((current) =>
+        current.length === 0
+          ? turns.map((turn) => ({ id: newId(), role: turn.role, content: turn.content }))
+          : current
+      );
+      setMemoryRestored(turns.length);
+    });
+  }, [ready, authenticated, walletsReady, address]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -196,7 +224,7 @@ export function CryptoCopilot() {
           </span>
           <div className="brand-text">
             <strong>Verdict</strong>
-            <span>GenLayer crypto copilot</span>
+            <span>Live market data · on-chain memory</span>
           </div>
         </div>
 
@@ -258,6 +286,13 @@ export function CryptoCopilot() {
           </div>
         ) : (
           <div className="messages">
+            {memoryRestored > 0 ? (
+              <div className="memory-note">
+                <ShieldCheck size={13} aria-hidden="true" />
+                Restored {memoryRestored} {memoryRestored === 1 ? "message" : "messages"} from
+                on-chain memory
+              </div>
+            ) : null}
             {messages.map((message) => (
               <article key={message.id} className={`msg ${message.role}`}>
                 <div className="avatar">

@@ -31,6 +31,41 @@ export function getGenLayerConfig() {
   return { contractAddress, network };
 }
 
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+// Reads the caller's on-chain conversation memory. Read-only: no wallet, no gas.
+export async function getOnChainHistory(address: string): Promise<ChatTurn[]> {
+  const { contractAddress, network } = getGenLayerConfig();
+  if (!contractAddress) return [];
+
+  const [{ createClient }, chains] = await Promise.all([
+    import("genlayer-js"),
+    import("genlayer-js/chains")
+  ]);
+  const chain = (chains as Record<string, unknown>)[network];
+  if (!chain) return [];
+
+  try {
+    const client = createClient({ chain: chain as never });
+    const raw = await client.readContract({
+      address: contractAddress,
+      functionName: "get_history",
+      args: [address]
+    });
+    const parsed = JSON.parse(typeof raw === "string" ? raw : "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (turn): turn is ChatTurn =>
+        !!turn &&
+        typeof turn === "object" &&
+        ((turn as ChatTurn).role === "user" || (turn as ChatTurn).role === "assistant") &&
+        typeof (turn as ChatTurn).content === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
 export async function askGenLayer({
   address,
   provider,
@@ -94,28 +129,83 @@ export async function askGenLayer({
       args: [address]
     });
 
-    return {
-      txHash: String(txHash),
-      answer: typeof answer === "string" ? answer : String(answer ?? ""),
-      network
-    };
+    // get_last_answer returns a str, but never let a non-string render as
+    // "[object Object]".
+    let answerText = "";
+    if (typeof answer === "string") {
+      answerText = answer;
+    } else if (answer != null) {
+      try {
+        answerText = JSON.stringify(answer);
+      } catch {
+        answerText = "";
+      }
+    }
+
+    return { txHash: String(txHash), answer: answerText, network };
   } catch (error) {
     throw new Error(humanizeGenLayerError(error));
   }
 }
 
+// Wallet/RPC/genlayer errors are often plain objects ({ code, message, ... }),
+// so `String(error)` yields "[object Object]". Dig out the real message.
+function extractErrorMessage(error: unknown): string {
+  if (error == null) return "";
+  if (typeof error === "string") return error;
+  if (typeof error === "object") {
+    const e = error as Record<string, unknown>;
+    const nested = (e.error ?? e.data ?? e.cause) as Record<string, unknown> | undefined;
+    const candidates = [
+      e.shortMessage,
+      e.details,
+      e.reason,
+      e.message,
+      nested?.message,
+      nested?.shortMessage
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    if (e.cause && e.cause !== error) {
+      const causeMessage = extractErrorMessage(e.cause);
+      if (causeMessage) return causeMessage;
+    }
+    try {
+      const json = JSON.stringify(e);
+      if (json && json !== "{}" && json !== "[]") return json;
+    } catch {
+      // circular — fall through
+    }
+  }
+  return String(error);
+}
+
 function humanizeGenLayerError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = extractErrorMessage(error);
   const lower = message.toLowerCase();
 
-  if (lower.includes("user rejected") || lower.includes("user denied")) {
+  if (
+    lower.includes("user rejected") ||
+    lower.includes("user denied") ||
+    lower.includes("rejected the request")
+  ) {
     return "Transaction rejected in your wallet.";
   }
-  if (lower.includes("insufficient funds") || lower.includes("insufficient balance")) {
-    return "Your wallet has no GEN to pay for this transaction. Fund it from the GenLayer Studio faucet and try again.";
+  if (
+    lower.includes("insufficient funds") ||
+    lower.includes("insufficient balance") ||
+    lower.includes("insufficient gen") ||
+    lower.includes("not enough")
+  ) {
+    return "This wallet has no studionet GEN to pay for gas. Fund the connected address from the GenLayer Studio faucet, then try again.";
   }
-  if (lower.includes("chain") && lower.includes("expect")) {
-    return "Your wallet is on the wrong network. Approve the network switch to GenLayer and retry.";
+  if (
+    lower.includes("unrecognized chain") ||
+    lower.includes("wrong network") ||
+    (lower.includes("chain") && (lower.includes("expect") || lower.includes("mismatch")))
+  ) {
+    return "Your wallet isn't on the GenLayer network. Approve the network switch and retry.";
   }
   return message || "GenLayer transaction failed.";
 }
