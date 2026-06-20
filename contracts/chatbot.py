@@ -9,17 +9,18 @@ import typing
 #
 # NOTE: the version + Depends magic comment above MUST be the only leading
 # comment block. GenVM reads contiguous leading "#" lines as the runner spec,
-# so any descriptive comments have to live below the import (here), never
-# between the Depends line and `from genlayer import *`.
+# so descriptive comments have to live below the import.
 #
-# Upgrades over the minimal version:
-#   1) LIVE DATA UNDER CONSENSUS - the contract fetches live market prices with
-#      gl.nondet.web.get inside leader_fn; every validator independently
-#      re-fetches and accepts only if prices agree within a tolerance (the
-#      grid_oracle pattern). Answers are grounded in consensus-verified live
-#      data, not just the frontend's snapshot.
-#   2) ON-CHAIN MEMORY - per-wallet conversation history is stored on chain, so
-#      Elsa remembers prior turns across messages, sessions, and devices.
+# Features:
+#   1) LIVE DATA - best-effort live market prices via gl.nondet.web.get, fed to
+#      the model. A blocked/rate-limited fetch falls back to an empty snapshot.
+#   2) ON-CHAIN MEMORY - per-wallet conversation history stored on chain.
+#
+# Two GenVM constraints this design respects:
+#   - calldata can't encode floats, so leader_fn returns the market as a JSON
+#     STRING (raw CoinGecko floats must never cross the leader->validator boundary).
+#   - reading contract storage inside a nondet block is unsupported, so the fetch
+#     is a module-level function and storage is read before/after the nondet block.
 
 # CoinGecko free endpoint: one call returns several majors with price + 24h %.
 MARKET_URL = (
@@ -27,10 +28,14 @@ MARKET_URL = (
     "?ids=bitcoin,ethereum,solana,binancecoin"
     "&vs_currencies=usd&include_24hr_change=true"
 )
-MARKET_COINS = ("bitcoin", "ethereum", "solana", "binancecoin")
-PRICE_TOLERANCE = 0.15      # 15% relative - absorbs volatility between fetches
 MAX_TURNS = 6               # keep the last 6 history entries (3 exchanges)
 MAX_STORED_ANSWER = 800     # truncate answers kept in the history context
+
+
+def _fetch_market() -> typing.Any:
+    resp = gl.nondet.web.get(MARKET_URL, headers={"Accept": "application/json"})
+    data = json.loads(resp.body.decode("utf-8"))
+    return data if isinstance(data, dict) else {}
 
 
 class CryptoChatbot(gl.Contract):
@@ -40,31 +45,6 @@ class CryptoChatbot(gl.Contract):
 
     def __init__(self) -> None:
         pass
-
-    def _fetch_market(self) -> typing.Any:
-        resp = gl.nondet.web.get(MARKET_URL, headers={"Accept": "application/json"})
-        data = json.loads(resp.body.decode("utf-8"))
-        if not isinstance(data, dict):
-            raise gl.vm.UserError("Bad market data")
-        return data
-
-    def _prices_close(self, a: typing.Any, b: typing.Any) -> bool:
-        if not isinstance(a, dict) or not isinstance(b, dict):
-            return False
-        for coin in MARKET_COINS:
-            ca = a.get(coin)
-            cb = b.get(coin)
-            if not isinstance(ca, dict) or not isinstance(cb, dict):
-                return False
-            pa = ca.get("usd")
-            pb = cb.get("usd")
-            if not isinstance(pa, (int, float)) or not isinstance(pb, (int, float)):
-                return False
-            if pa <= 0 or pb <= 0:
-                return False
-            if abs(pa - pb) / max(pa, pb) > PRICE_TOLERANCE:
-                return False
-        return True
 
     @gl.public.write
     def ask(self, question: str, context: str) -> str:
@@ -79,24 +59,30 @@ class CryptoChatbot(gl.Contract):
         prior_history = self.history.get(sender, "[]")
 
         def leader_fn() -> typing.Any:
-            market = self._fetch_market()
+            # Best-effort live market data; a flaky fetch must never break the tx.
+            try:
+                market = _fetch_market()
+            except Exception:
+                market = {}
+            market_json = json.dumps(market)
             prompt = (
                 "You are Elsa, a concise crypto-native portfolio copilot.\n"
-                "You are given LIVE consensus-verified market prices, the user's "
-                "wallet context, and the recent conversation. Use them as ground "
-                "truth and stay consistent with earlier turns.\n"
+                "Use the live market prices (may be empty), the wallet context, and "
+                "the recent conversation as ground truth; stay consistent with "
+                "earlier turns.\n"
                 "Rules: never claim you executed or sent a transaction; never "
                 "guarantee future prices, yields, or outcomes; if asked to trade, "
                 "give a short checklist and the risks instead of acting; call out "
                 "concentration, chain, protocol, liquidity, bridge, and approval "
                 "risk when relevant. Be practical and short.\n\n"
-                f"Live market (USD, with 24h % change):\n{json.dumps(market)}\n\n"
+                f"Live market (USD, with 24h % change):\n{market_json}\n\n"
                 f"Wallet context:\n{context}\n\n"
                 f"Recent conversation (oldest first):\n{prior_history}\n\n"
                 f"User question:\n{question}"
             )
             answer = gl.nondet.exec_prompt(prompt)
-            return {"market": market, "answer": answer.strip()}
+            # Only calldata-encodable strings cross to the validators (no floats).
+            return {"market": market_json, "answer": answer.strip()}
 
         def validator_fn(leader_result: typing.Any) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
@@ -105,14 +91,12 @@ class CryptoChatbot(gl.Contract):
             if not isinstance(payload, dict):
                 return False
             answer = payload.get("answer")
-            market = payload.get("market")
-            if not isinstance(answer, str) or len(answer.strip()) < 1:
-                return False
-            my_market = self._fetch_market()
-            return self._prices_close(market, my_market)
+            return isinstance(answer, str) and len(answer.strip()) >= 1
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        answer = str(result["answer"])
+        answer = str(result.get("answer", "")).strip()
+        if len(answer) == 0:
+            raise gl.vm.UserError("Consensus produced an empty answer")
 
         try:
             turns = json.loads(prior_history)
@@ -126,7 +110,7 @@ class CryptoChatbot(gl.Contract):
 
         self.history[sender] = json.dumps(turns)
         self.answers[sender] = answer
-        self.last_market[sender] = json.dumps(result["market"])
+        self.last_market[sender] = str(result.get("market", "{}"))
         return answer
 
     @gl.public.view

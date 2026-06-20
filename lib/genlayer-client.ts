@@ -124,23 +124,28 @@ export async function askGenLayer({
       status: acceptedStatus as never
     });
 
-    const answer = await client.readContract({
-      address: contractAddress,
-      functionName: "get_last_answer",
-      args: [address]
-    });
-
-    // get_last_answer returns a str, but never let a non-string render as
-    // "[object Object]".
+    // After ACCEPTED the answer should be stored, but the read node can briefly
+    // lag consensus — poll a few times before giving up rather than show empty.
     let answerText = "";
-    if (typeof answer === "string") {
-      answerText = answer;
-    } else if (answer != null) {
-      try {
-        answerText = JSON.stringify(answer);
-      } catch {
-        answerText = "";
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const raw = await client.readContract({
+        address: contractAddress,
+        functionName: "get_last_answer",
+        args: [address]
+      });
+      // get_last_answer returns a str, but never let a non-string render as
+      // "[object Object]".
+      if (typeof raw === "string") {
+        answerText = raw;
+      } else if (raw != null) {
+        try {
+          answerText = JSON.stringify(raw);
+        } catch {
+          answerText = "";
+        }
       }
+      if (answerText.trim().length > 0) break;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2500));
     }
 
     return { txHash: String(txHash), answer: answerText, network };
