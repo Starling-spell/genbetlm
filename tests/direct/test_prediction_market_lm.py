@@ -29,12 +29,12 @@ def _create_btc_market(contract, direct_vm, direct_alice, *, deadline=1_900_000_
     )
 
 
-def test_model_card_describes_genlayer_native_market_lm(direct_deploy):
+def test_model_card_describes_genlayer_native_bet_lm(direct_deploy):
     contract = _deploy_market(direct_deploy)
 
     card = contract.get_model_card()
 
-    assert card["name"] == "GenMarketLM"
+    assert card["name"] == "GenBetLM"
     assert card["native_runtime"] == "GenLayer Intelligent Contract"
     assert "resolve markets from source evidence after deadline" in card["capabilities"]
 

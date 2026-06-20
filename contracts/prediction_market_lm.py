@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from genlayer import *
 
 
-# GenMarketLM turns validator LLM consensus into market drafting, forecasting,
+# GenBetLM turns validator LLM consensus into market drafting, forecasting,
 # and source-backed settlement.
 ST_OPEN = "open"
 ST_RESOLVED = "resolved"
@@ -147,7 +147,7 @@ def _build_market_draft_prompt(
     settlement_hint: str,
     deadline_iso: str,
 ) -> str:
-    return f"""You are GenMarketLM, a market-drafting model for binary prediction markets.
+    return f"""You are GenBetLM, a market-drafting model for binary prediction markets.
 
 Create one clean YES/NO market from the user's topic. The market should feel compatible
 with Polymarket/Kalshi-style event contracts, but it must be source-backed and resolvable
@@ -184,7 +184,7 @@ def _build_forecast_prompt(
     source_url: str,
     webpage_text: str,
 ) -> str:
-    return f"""You are GenMarketLM, a cautious forecasting model embedded in a GenLayer
+    return f"""You are GenBetLM, a cautious forecasting model embedded in a GenLayer
 prediction-market intelligent contract.
 
 MARKET:
@@ -230,7 +230,7 @@ def _build_resolution_prompt(
     source_url: str,
     webpage_text: str,
 ) -> str:
-    return f"""You are GenMarketLM, an impartial resolver for a source-backed YES/NO
+    return f"""You are GenBetLM, an impartial resolver for a source-backed YES/NO
 prediction market.
 
 MARKET:
@@ -871,7 +871,7 @@ class PredictionMarketLM(gl.Contract):
     @gl.public.view
     def get_model_card(self) -> dict:
         return {
-            "name": "GenMarketLM",
+            "name": "GenBetLM",
             "version": "0.1.0",
             "native_runtime": "GenLayer Intelligent Contract",
             "market_style": "source-backed YES/NO prediction markets",

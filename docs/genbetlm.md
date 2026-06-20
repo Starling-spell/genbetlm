@@ -1,6 +1,6 @@
-# GenMarketLM
+# GenBetLM
 
-GenMarketLM is a GenLayer-native prediction-market language model implemented as an
+GenBetLM is a GenLayer-native prediction-market language model implemented as an
 Intelligent Contract in `contracts/prediction_market_lm.py`.
 
 It is not a separately trained centralized model. On GenLayer, the native primitive is a
@@ -24,7 +24,7 @@ commits only the normalized result that passes validator consensus.
 
 ## Equivalence Principles
 
-GenMarketLM uses three different validator checks:
+GenBetLM uses three different validator checks:
 
 - Market drafts: validators accept the leader result if it is a valid, resolvable YES/NO
   market spec. They do not require identical wording.

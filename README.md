@@ -42,7 +42,7 @@ server. The prompt also treats the context as untrusted input to resist prompt i
 Currently deployed on **studionet** at
 [`0x16822c3905f0B6B8398A1faE8Fc0178D5Bbf0332`](https://explorer-studio.genlayer.com/address/0x16822c3905f0B6B8398A1faE8Fc0178D5Bbf0332).
 
-## GenMarketLM
+## GenBetLM
 
 [`contracts/prediction_market_lm.py`](contracts/prediction_market_lm.py) adds a
 GenLayer-native prediction-market language model for Polymarket/Kalshi-style YES/NO
@@ -50,7 +50,7 @@ markets. It can draft source-backed market terms, forecast YES probability from 
 evidence and pool signal, resolve after the deadline through validator consensus, and pay
 pari-mutuel pools.
 
-See [`docs/prediction-market-lm.md`](docs/prediction-market-lm.md) for the model card,
+See [`docs/genbetlm.md`](docs/genbetlm.md) for the model card,
 equivalence principles, and method overview.
 
 ## Local development
@@ -81,7 +81,7 @@ Deploy [`contracts/chatbot.py`](contracts/chatbot.py) to studionet via the
 GENLAYER_NETWORK=studionet GENLAYER_PRIVATE_KEY=0x... npx tsx scripts/deploy-genlayer.ts
 ```
 
-To deploy GenMarketLM instead of the chatbot contract:
+To deploy GenBetLM instead of the chatbot contract:
 
 ```bash
 GENLAYER_CONTRACT_PATH=contracts/prediction_market_lm.py GENLAYER_NETWORK=studionet GENLAYER_PRIVATE_KEY=0x... npm run deploy:contract
@@ -112,9 +112,9 @@ components/
   missing-setup.tsx
 contracts/
   chatbot.py                      # the GenLayer brain
-  prediction_market_lm.py         # GenMarketLM prediction-market contract
+  prediction_market_lm.py         # GenBetLM prediction-market contract
 docs/
-  prediction-market-lm.md
+  genbetlm.md
 lib/
   genlayer-client.ts             # askGenLayer(): connect → write → wait → read
   chains.ts                      # studionet as a viem chain for Privy
