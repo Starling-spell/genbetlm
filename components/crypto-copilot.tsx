@@ -1,366 +1,418 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import {
-  ArrowUp,
+  Activity,
+  ArrowDownUp,
+  Bell,
   Bot,
+  CheckCircle2,
+  Clock3,
   ExternalLink,
+  FileSearch,
+  Flame,
+  Gauge,
+  LineChart,
   Loader2,
   LogOut,
-  RefreshCw,
+  Plus,
   ShieldCheck,
-  Wallet
+  Sparkles,
+  Wallet,
+  WalletCards
 } from "lucide-react";
 import { VerdictLogo } from "@/components/verdict-logo";
-import {
-  askGenLayer,
-  getGenLayerConfig,
-  getOnChainHistory,
-  type AskGenLayerPhase
-} from "@/lib/genlayer-client";
 import { formatUsd, shortAddress } from "@/lib/format";
-import type { WalletSnapshot } from "@/lib/types";
 
-type UiMessage = {
+type Market = {
   id: string;
-  role: "user" | "assistant";
-  content: string;
-  pending?: boolean;
-  phase?: AskGenLayerPhase;
-  txHash?: string;
-  error?: boolean;
+  question: string;
+  category: string;
+  source: string;
+  closeLabel: string;
+  yesProbability: number;
+  liquidityUsd: number;
+  volumeUsd: number;
+  status: "open" | "forecasting" | "resolving";
+  confidence: number;
+  change: number;
 };
 
-const PHASE_LABEL: Record<AskGenLayerPhase, string> = {
-  connecting: "Switching your wallet to GenLayer…",
-  approving: "Approve the transaction in your wallet…",
-  consensus: "Running GenLayer consensus…"
-};
-
-const EXAMPLES = [
-  "Summarize my portfolio and its biggest risks",
-  "Which position am I most concentrated in?",
-  "What should I check before bridging to Base?",
-  "Explain the risks of my DeFi positions"
+const INITIAL_MARKETS: Market[] = [
+  {
+    id: "btc-100k",
+    question: "Will BTC close above $100,000 this Friday?",
+    category: "Crypto",
+    source: "coinmarketcap.com",
+    closeLabel: "Jun 26, 2026",
+    yesProbability: 61,
+    liquidityUsd: 84200,
+    volumeUsd: 318000,
+    status: "open",
+    confidence: 72,
+    change: 4.2
+  },
+  {
+    id: "eth-etf",
+    question: "Will weekly ETH ETF net inflows exceed $500M?",
+    category: "Macro",
+    source: "farside.co.uk",
+    closeLabel: "Jun 27, 2026",
+    yesProbability: 43,
+    liquidityUsd: 37600,
+    volumeUsd: 129500,
+    status: "forecasting",
+    confidence: 58,
+    change: -2.1
+  },
+  {
+    id: "fed-cut",
+    question: "Will the Fed announce a rate cut at the next meeting?",
+    category: "Rates",
+    source: "federalreserve.gov",
+    closeLabel: "Jul 29, 2026",
+    yesProbability: 29,
+    liquidityUsd: 126400,
+    volumeUsd: 511000,
+    status: "open",
+    confidence: 81,
+    change: 1.3
+  }
 ];
 
-const EXPLORER_URL = "https://explorer-studio.genlayer.com";
+const CATEGORY_OPTIONS = ["Crypto", "Macro", "Sports", "Politics", "Weather", "Culture"];
 
-function newId() {
+function newMarketId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
   return Math.random().toString(36).slice(2);
 }
 
-// Compact, on-chain-friendly portfolio context passed into every GenLayer tx.
-function buildContext(wallet: WalletSnapshot | null): string {
-  if (!wallet) {
-    return JSON.stringify({ note: "No wallet portfolio data available yet." });
-  }
-  const topPositions = wallet.positions.slice(0, 8).map((position) => ({
-    symbol: position.symbol,
-    chain: position.chain,
-    value_usd: Math.round(position.valueUsd),
-    type: position.type,
-    protocol: position.protocol
-  }));
-  return JSON.stringify({
-    address: wallet.address,
-    source: wallet.source,
-    total_usd: Math.round(wallet.portfolio.totalUsd),
-    day_change_percent: wallet.portfolio.dayChangePercent,
-    chains: wallet.portfolio.byChain,
-    top_positions: topPositions
-  });
+function probabilityLabel(value: number) {
+  return `${Math.round(value)}%`;
 }
 
-export function CryptoCopilot() {
+function sourceHost(raw: string) {
+  try {
+    return new URL(raw).host.replace(/^www\./, "");
+  } catch {
+    return raw.replace(/^https?:\/\//, "").split("/")[0] || "source pending";
+  }
+}
+
+export function GenBetLMApp() {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
-  const [wallet, setWallet] = useState<WalletSnapshot | null>(null);
-  const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [loadingWallet, setLoadingWallet] = useState(false);
-  const [memoryRestored, setMemoryRestored] = useState(0);
-  const endRef = useRef<HTMLDivElement>(null);
-  const restoredForRef = useRef<string | null>(null);
+  const [markets, setMarkets] = useState<Market[]>(INITIAL_MARKETS);
+  const [selectedId, setSelectedId] = useState(INITIAL_MARKETS[0].id);
+  const [side, setSide] = useState<"yes" | "no">("yes");
+  const [stake, setStake] = useState("250");
+  const [question, setQuestion] = useState("Will SOL close above $180 before July 1?");
+  const [category, setCategory] = useState("Crypto");
+  const [source, setSource] = useState("https://coinmarketcap.com/currencies/solana/");
+  const [deadline, setDeadline] = useState("2026-07-01");
+  const [drafting, setDrafting] = useState(false);
 
   const activeWallet = useMemo(() => {
-    // Prefer a connected external wallet (e.g. MetaMask holding a GEN-funded
-    // account) over the auto-created Privy embedded wallet, which has no gas on
-    // studionet. Fall back to the embedded wallet if nothing external is linked.
     const external = wallets.find((item) => item.walletClientType !== "privy");
     const embedded = wallets.find((item) => item.walletClientType === "privy");
     return external ?? embedded ?? wallets[0] ?? null;
   }, [wallets]);
-  const address = activeWallet?.address as `0x${string}` | undefined;
-  const { contractAddress } = getGenLayerConfig();
-  const configured = Boolean(contractAddress);
 
-  const loadWallet = useCallback(async () => {
-    if (!address) return;
-    setLoadingWallet(true);
-    try {
-      const response = await fetch(`/api/wallet/${address}`);
-      const data = (await response.json()) as { wallet?: WalletSnapshot };
-      if (response.ok && data.wallet) {
-        setWallet(data.wallet);
-      }
-    } catch {
-      // Non-fatal: the chat still works, the contract just gets an empty context.
-    } finally {
-      setLoadingWallet(false);
+  const address = activeWallet?.address;
+  const selectedMarket = markets.find((market) => market.id === selectedId) ?? markets[0];
+  const openMarkets = markets.filter((market) => market.status !== "resolving").length;
+  const totalLiquidity = markets.reduce((total, market) => total + market.liquidityUsd, 0);
+  const totalVolume = markets.reduce((total, market) => total + market.volumeUsd, 0);
+  const walletReady = ready && walletsReady;
+
+  function connect() {
+    if (!authenticated) {
+      login();
     }
-  }, [address]);
-
-  useEffect(() => {
-    if (ready && authenticated && walletsReady && address) {
-      void loadWallet();
-    }
-  }, [ready, authenticated, walletsReady, address, loadWallet]);
-
-  // Restore the wallet's on-chain conversation memory once per address. Only
-  // seeds when the chat is empty, so it never clobbers an active conversation.
-  useEffect(() => {
-    if (!ready || !authenticated || !walletsReady || !address) return;
-    if (restoredForRef.current === address) return;
-    restoredForRef.current = address;
-    void getOnChainHistory(address).then((turns) => {
-      if (turns.length === 0) return;
-      setMessages((current) =>
-        current.length === 0
-          ? turns.map((turn) => ({ id: newId(), role: turn.role, content: turn.content }))
-          : current
-      );
-      setMemoryRestored(turns.length);
-    });
-  }, [ready, authenticated, walletsReady, address]);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
-
-  function patch(id: string, next: Partial<UiMessage>) {
-    setMessages((current) =>
-      current.map((message) => (message.id === id ? { ...message, ...next } : message))
-    );
   }
 
-  async function send(text?: string) {
-    const content = (text ?? input).trim();
-    if (!content || busy) return;
-
-    if (!authenticated || !address || !activeWallet) {
+  function createMarket(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!question.trim()) return;
+    if (!authenticated) {
       login();
       return;
     }
 
-    const userMessage: UiMessage = { id: newId(), role: "user", content };
-    const pendingId = newId();
-    const pendingMessage: UiMessage = {
-      id: pendingId,
-      role: "assistant",
-      content: "",
-      pending: true,
-      phase: "connecting"
+    const id = newMarketId();
+    const nextMarket: Market = {
+      id,
+      question: question.trim(),
+      category,
+      source: sourceHost(source.trim()),
+      closeLabel: deadline || "Deadline pending",
+      yesProbability: 52,
+      liquidityUsd: 0,
+      volumeUsd: 0,
+      status: "forecasting",
+      confidence: 49,
+      change: 0
     };
-
-    setMessages((current) => [...current, userMessage, pendingMessage]);
-    setInput("");
-
-    if (!configured) {
-      patch(pendingId, {
-        pending: false,
-        error: true,
-        content:
-          "GenLayer contract address is not set. Deploy contracts/chatbot.py to studionet and set NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS."
-      });
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const provider = await activeWallet.getEthereumProvider();
-      const result = await askGenLayer({
-        address,
-        provider,
-        question: content,
-        context: buildContext(wallet),
-        onPhase: (phase) => patch(pendingId, { phase })
-      });
-      patch(pendingId, {
-        pending: false,
-        content: result.answer || "(GenLayer returned an empty answer)",
-        txHash: result.txHash
-      });
-      void loadWallet();
-    } catch (error) {
-      patch(pendingId, {
-        pending: false,
-        error: true,
-        content: error instanceof Error ? error.message : "GenLayer transaction failed."
-      });
-    } finally {
-      setBusy(false);
-    }
+    setMarkets((current) => [nextMarket, ...current]);
+    setSelectedId(id);
   }
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void send();
+  function draftWithAi() {
+    setDrafting(true);
+    window.setTimeout(() => {
+      setQuestion("Will SOL close above $180 before July 1, 2026?");
+      setSource("https://coinmarketcap.com/currencies/solana/");
+      setCategory("Crypto");
+      setDeadline("2026-07-01");
+      setDrafting(false);
+    }, 600);
   }
 
-  const empty = messages.length === 0;
+  const selectedStake = Number(stake) || 0;
+  const payoutMultiple =
+    side === "yes"
+      ? 100 / Math.max(selectedMarket.yesProbability, 1)
+      : 100 / Math.max(100 - selectedMarket.yesProbability, 1);
+  const estimatedReturn = selectedStake * payoutMultiple;
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-orb">
-            <VerdictLogo size={18} />
+    <main className="product-shell">
+      <header className="app-header">
+        <div className="brand-lockup">
+          <span className="brand-mark">
+            <VerdictLogo size={20} />
           </span>
-          <div className="brand-text">
-            <strong>Verdict</strong>
-            <span>Live market data · on-chain memory</span>
+          <div>
+            <strong>GenBetLM</strong>
+            <span>GenLayer-native prediction markets</span>
           </div>
         </div>
 
-        <div className="topbar-actions">
-          {wallet ? (
-            <button
-              className="ghost-chip"
-              onClick={loadWallet}
-              disabled={loadingWallet}
-              title="Refresh portfolio"
-            >
-              {loadingWallet ? (
-                <Loader2 className="spin" size={14} aria-hidden="true" />
-              ) : (
-                <RefreshCw size={14} aria-hidden="true" />
-              )}
-              {formatUsd(wallet.portfolio.totalUsd, true)}
-            </button>
-          ) : null}
+        <nav className="header-tabs" aria-label="Primary">
+          <button className="header-tab active">Markets</button>
+          <button className="header-tab">Forecasts</button>
+          <button className="header-tab">Settlements</button>
+        </nav>
 
+        <div className="wallet-actions">
           {authenticated && address ? (
-            <div className="wallet-group">
-              <span className="wallet-chip" title={address}>
+            <>
+              <span className="network-pill">
+                <ShieldCheck size={14} aria-hidden="true" />
+                Studionet
+              </span>
+              <span className="wallet-pill" title={address}>
                 <Wallet size={14} aria-hidden="true" />
                 {shortAddress(address)}
               </span>
-              <button className="icon-btn" onClick={logout} title="Disconnect" aria-label="Disconnect">
-                <LogOut size={14} aria-hidden="true" />
+              <button className="icon-button" type="button" onClick={logout} aria-label="Disconnect">
+                <LogOut size={15} aria-hidden="true" />
               </button>
-            </div>
+            </>
           ) : (
-            <button className="connect-btn" onClick={login} disabled={!ready}>
-              <Wallet size={15} aria-hidden="true" />
-              Connect wallet
+            <button className="connect-wallet" type="button" onClick={connect} disabled={!walletReady}>
+              {walletReady ? <WalletCards size={16} aria-hidden="true" /> : <Loader2 className="spin" size={16} />}
+              Connect with Privy
             </button>
           )}
         </div>
       </header>
 
-      <section className="conversation">
-        {empty ? (
-          <div className="welcome">
-            <div className="welcome-orb">
-              <VerdictLogo size={30} />
-            </div>
-            <h1>Crypto answers, settled by GenLayer</h1>
-            <p>
-              Connect your wallet and ask anything about your portfolio. Every message is a GenLayer
-              transaction you approve in your wallet — the answer comes from validator consensus, not
-              a single server.
-            </p>
-            <div className="examples">
-              {EXAMPLES.map((example) => (
-                <button key={example} className="example" onClick={() => void send(example)}>
-                  {example}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="messages">
-            {memoryRestored > 0 ? (
-              <div className="memory-note">
-                <ShieldCheck size={13} aria-hidden="true" />
-                Restored {memoryRestored} {memoryRestored === 1 ? "message" : "messages"} from
-                on-chain memory
-              </div>
-            ) : null}
-            {messages.map((message) => (
-              <article key={message.id} className={`msg ${message.role}`}>
-                <div className="avatar">
-                  {message.role === "assistant" ? (
-                    <Bot size={16} aria-hidden="true" />
-                  ) : (
-                    <Wallet size={16} aria-hidden="true" />
-                  )}
-                </div>
-                <div className="bubble-wrap">
-                  {message.pending ? (
-                    <div className="bubble status">
-                      <Loader2 className="spin" size={15} aria-hidden="true" />
-                      {PHASE_LABEL[message.phase ?? "connecting"]}
-                    </div>
-                  ) : (
-                    <div className={`bubble ${message.error ? "error" : ""}`}>{message.content}</div>
-                  )}
-                  {message.txHash ? (
-                    <a
-                      className="tx-link"
-                      href={`${EXPLORER_URL}/tx/${message.txHash}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <ShieldCheck size={13} aria-hidden="true" />
-                      GenLayer tx {shortAddress(message.txHash)}
-                      <ExternalLink size={12} aria-hidden="true" />
-                    </a>
-                  ) : null}
-                </div>
-              </article>
-            ))}
-            <div ref={endRef} />
-          </div>
-        )}
+      <section className="kpi-strip" aria-label="Market overview">
+        <div className="kpi-item">
+          <Activity size={17} aria-hidden="true" />
+          <span>Open Markets</span>
+          <strong>{openMarkets}</strong>
+        </div>
+        <div className="kpi-item">
+          <Gauge size={17} aria-hidden="true" />
+          <span>Consensus Confidence</span>
+          <strong>71%</strong>
+        </div>
+        <div className="kpi-item">
+          <Flame size={17} aria-hidden="true" />
+          <span>Liquidity</span>
+          <strong>{formatUsd(totalLiquidity, true)}</strong>
+        </div>
+        <div className="kpi-item">
+          <LineChart size={17} aria-hidden="true" />
+          <span>Volume</span>
+          <strong>{formatUsd(totalVolume, true)}</strong>
+        </div>
       </section>
 
-      <footer className="composer-wrap">
-        <form className="composer" onSubmit={onSubmit}>
-          <textarea
-            rows={1}
-            value={input}
-            placeholder={
-              authenticated ? "Ask Verdict about your portfolio…" : "Connect your wallet to start…"
-            }
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            disabled={busy}
-          />
-          <button className="send-btn" disabled={busy || !input.trim()} aria-label="Send">
-            {busy ? (
-              <Loader2 className="spin" size={17} aria-hidden="true" />
-            ) : (
-              <ArrowUp size={17} aria-hidden="true" />
-            )}
-          </button>
-        </form>
-        <p className="composer-note">
-          Each message is signed as a GenLayer transaction on studionet. Keep some test GEN in your
-          wallet for gas.
-        </p>
-      </footer>
+      <div className="workspace-grid">
+        <section className="market-builder" aria-labelledby="builder-title">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Market Composer</span>
+              <h1 id="builder-title">Create a source-backed market</h1>
+            </div>
+            <button className="ai-button" type="button" onClick={draftWithAi} disabled={drafting}>
+              {drafting ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
+              Draft
+            </button>
+          </div>
+
+          <form className="builder-form" onSubmit={createMarket}>
+            <label>
+              <span>Question</span>
+              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
+            </label>
+
+            <div className="field-row">
+              <label>
+                <span>Category</span>
+                <select value={category} onChange={(event) => setCategory(event.target.value)}>
+                  {CATEGORY_OPTIONS.map((option) => (
+                    <option key={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Deadline</span>
+                <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
+              </label>
+            </div>
+
+            <label>
+              <span>Resolution Source</span>
+              <input value={source} onChange={(event) => setSource(event.target.value)} />
+            </label>
+
+            <button className="primary-action" type="submit">
+              {authenticated ? <Plus size={16} /> : <Wallet size={16} />}
+              {authenticated ? "Create Market" : "Connect to Create"}
+            </button>
+          </form>
+        </section>
+
+        <section className="market-board" aria-labelledby="markets-title">
+          <div className="section-heading compact">
+            <div>
+              <span className="eyebrow">Order Book</span>
+              <h2 id="markets-title">Live Markets</h2>
+            </div>
+            <button className="icon-button" type="button" aria-label="Alerts">
+              <Bell size={16} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="market-list">
+            {markets.map((market) => (
+              <button
+                key={market.id}
+                type="button"
+                className={`market-row ${market.id === selectedMarket.id ? "selected" : ""}`}
+                onClick={() => setSelectedId(market.id)}
+              >
+                <span className="market-main">
+                  <span className="market-question">{market.question}</span>
+                  <span className="market-meta">
+                    {market.category} / {market.source} / {market.closeLabel}
+                  </span>
+                </span>
+                <span className="probability-cell">
+                  <span className="probability-bar" aria-hidden="true">
+                    <span style={{ width: `${market.yesProbability}%` }} />
+                  </span>
+                  <strong>{probabilityLabel(market.yesProbability)}</strong>
+                </span>
+                <span className={`change ${market.change >= 0 ? "up" : "down"}`}>
+                  {market.change >= 0 ? "+" : ""}
+                  {market.change.toFixed(1)}%
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <aside className="trade-panel" aria-labelledby="trade-title">
+          <div className="trade-header">
+            <span className="status-badge">
+              <CheckCircle2 size={14} aria-hidden="true" />
+              {selectedMarket.status}
+            </span>
+            <span className="confidence-badge">
+              <Bot size={14} aria-hidden="true" />
+              {selectedMarket.confidence}% confidence
+            </span>
+          </div>
+
+          <h2 id="trade-title">{selectedMarket.question}</h2>
+
+          <div className="source-line">
+            <FileSearch size={15} aria-hidden="true" />
+            {selectedMarket.source}
+            <ExternalLink size={13} aria-hidden="true" />
+          </div>
+
+          <div className="market-depth">
+            <div>
+              <span>YES</span>
+              <strong>{probabilityLabel(selectedMarket.yesProbability)}</strong>
+            </div>
+            <div>
+              <span>NO</span>
+              <strong>{probabilityLabel(100 - selectedMarket.yesProbability)}</strong>
+            </div>
+          </div>
+
+          <div className="ticket">
+            <div className="side-toggle" role="group" aria-label="Position side">
+              <button
+                type="button"
+                className={side === "yes" ? "active yes" : ""}
+                onClick={() => setSide("yes")}
+              >
+                YES
+              </button>
+              <button
+                type="button"
+                className={side === "no" ? "active no" : ""}
+                onClick={() => setSide("no")}
+              >
+                NO
+              </button>
+            </div>
+
+            <label className="stake-field">
+              <span>Stake</span>
+              <input
+                inputMode="decimal"
+                value={stake}
+                onChange={(event) => setStake(event.target.value.replace(/[^\d.]/g, ""))}
+              />
+            </label>
+
+            <dl className="ticket-summary">
+              <div>
+                <dt>Est. Return</dt>
+                <dd>{formatUsd(estimatedReturn)}</dd>
+              </div>
+              <div>
+                <dt>Liquidity</dt>
+                <dd>{formatUsd(selectedMarket.liquidityUsd, true)}</dd>
+              </div>
+              <div>
+                <dt>Resolution</dt>
+                <dd>
+                  <Clock3 size={13} aria-hidden="true" />
+                  {selectedMarket.closeLabel}
+                </dd>
+              </div>
+            </dl>
+
+            <button className="primary-action full" type="button" onClick={connect}>
+              {authenticated ? <ArrowDownUp size={16} /> : <Wallet size={16} />}
+              {authenticated ? "Sign Position" : "Connect with Privy"}
+            </button>
+          </div>
+        </aside>
+      </div>
     </main>
   );
 }

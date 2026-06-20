@@ -1,87 +1,55 @@
-# Verdict — GenLayer crypto copilot
+# GenBetLM
 
-A minimal crypto-native chatbot where **GenLayer is the brain**. Every chat message is a
-GenLayer transaction the user approves in their wallet, and the answer comes from validator
-**consensus** — not a single server. Each reply is a *verdict*: an LLM answer plus a risk read,
-settled on-chain.
+GenBetLM is a Privy-connected Web3 prediction-market product powered by a GenLayer
+Intelligent Contract. The app presents a market workspace for drafting YES/NO markets,
+reviewing source-backed forecasts, and preparing signed wallet actions.
 
-- **Privy** — wallet login (email / Google / external) + an embedded EVM wallet to sign with.
-- **Zerion** — live portfolio context, fetched server-side so the API key stays private.
-- **GenLayer** — an Intelligent Contract runs the LLM under Optimistic Democracy consensus.
+- **Privy** - wallet login through email, Google, external wallets, or embedded EVM wallets.
+- **GenLayer** - `contracts/prediction_market_lm.py` drafts, forecasts, and resolves markets.
+- **Web3 UX** - market composer, live market board, trade ticket, and connected account rail.
 
-## How a message works
+## Product
 
-1. You log in with Privy and your wallet loads a Zerion portfolio snapshot (server-side).
-2. You send a message. The app builds a compact portfolio context and calls the contract with
-   [`genlayer-js`](lib/genlayer-client.ts):
-   - `client.connect("studionet")` adds/switches your wallet to GenLayer chain `61999`.
-   - `client.writeContract({ functionName: "ask", args: [question, context] })`.
-3. **Privy shows a transaction approval** — you approve it.
-4. Validators reach consensus on the answer; the app reads it back and renders it with the tx hash.
+The first screen is the market workspace:
 
-> Each message = a wallet approval + a short consensus wait + a little GEN gas. That is the point:
-> the answer is settled on-chain.
+- Connect with Privy.
+- Draft a source-backed market.
+- Track YES/NO probabilities, liquidity, and source metadata.
+- Prepare a signed position from the trade panel.
 
-## The contract
+The UI is currently wired as a polished Web3 product surface. The GenLayer market contract is
+included and validated; connecting the market action buttons to deployed contract writes is the
+next integration step.
 
-[`contracts/chatbot.py`](contracts/chatbot.py) is intentionally tiny:
+## GenLayer Contract
 
-```python
-@gl.public.write
-def ask(self, question: str, context: str) -> str:
-    # runs the LLM (JSON: answer + risk_level) under the comparative Equivalence
-    # Principle, stores it per sender address, and returns the answer
-@gl.public.view
-def get_last_answer(self, address: str) -> str: ...   # also get_my_last_answer()
-```
+[`contracts/prediction_market_lm.py`](contracts/prediction_market_lm.py) implements GenBetLM:
 
-It takes the portfolio context as an argument, so it needs **no public proxy** and no
-`set_zerion_base_url` step — the frontend supplies the data and the Zerion key never leaves the
-server. The prompt also treats the context as untrusted input to resist prompt injection.
+- `create_ai_market(...)` generates a market question and settlement rule from a topic.
+- `forecast_market(...)` fetches evidence and stores a consensus YES probability.
+- `resolve_market(...)` resolves after deadline and pays/refunds positions.
+- `get_model_card()` returns the product capability and consensus profile.
 
-Currently deployed on **studionet** at
-[`0x16822c3905f0B6B8398A1faE8Fc0178D5Bbf0332`](https://explorer-studio.genlayer.com/address/0x16822c3905f0B6B8398A1faE8Fc0178D5Bbf0332).
+See [`docs/genbetlm.md`](docs/genbetlm.md) for the model card and equivalence principles.
 
-## GenBetLM
-
-[`contracts/prediction_market_lm.py`](contracts/prediction_market_lm.py) adds a
-GenLayer-native prediction-market language model for Polymarket/Kalshi-style YES/NO
-markets. It can draft source-backed market terms, forecast YES probability from web
-evidence and pool signal, resolve after the deadline through validator consensus, and pay
-pari-mutuel pools.
-
-See [`docs/genbetlm.md`](docs/genbetlm.md) for the model card,
-equivalence principles, and method overview.
-
-## Local development
+## Local Development
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in the values below
-npm run dev                  # http://localhost:3000
+cp .env.example .env.local
+npm run dev
 ```
 
 Environment variables:
 
-| Variable | Where | Purpose |
-| --- | --- | --- |
-| `NEXT_PUBLIC_PRIVY_APP_ID` | client | Privy login + embedded wallets |
-| `ZERION_API_KEY` | server | Live portfolio data (stays private) |
-| `NEXT_PUBLIC_GENLAYER_NETWORK` | client | `studionet` (default) |
-| `NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS` | client | Address of the deployed contract |
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | Enables Privy wallet login |
+| `NEXT_PUBLIC_PRIVY_CLIENT_ID` | Optional Privy client id |
+| `NEXT_PUBLIC_GENLAYER_NETWORK` | GenLayer network, defaults to `studionet` |
+| `NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS` | Deployed GenLayer contract address |
 
-Without `ZERION_API_KEY` the app uses a demo portfolio so you can still test the flow.
-
-## Deploy the contract
-
-Deploy [`contracts/chatbot.py`](contracts/chatbot.py) to studionet via the
-[GenLayer Studio](https://studio.genlayer.com) UI, or with the included script:
-
-```bash
-GENLAYER_NETWORK=studionet GENLAYER_PRIVATE_KEY=0x... npx tsx scripts/deploy-genlayer.ts
-```
-
-To deploy GenBetLM instead of the chatbot contract:
+## Deploy Contract
 
 ```bash
 GENLAYER_CONTRACT_PATH=contracts/prediction_market_lm.py GENLAYER_NETWORK=studionet GENLAYER_PRIVATE_KEY=0x... npm run deploy:contract
@@ -89,42 +57,36 @@ GENLAYER_CONTRACT_PATH=contracts/prediction_market_lm.py GENLAYER_NETWORK=studio
 
 Copy the printed address into `NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS`.
 
-**Funding:** the wallet that signs each message needs studionet **GEN** for gas. Fund your Privy
-wallet address from the GenLayer Studio faucet. (If studio funding is awkward, switch
-`NEXT_PUBLIC_GENLAYER_NETWORK` to `testnetAsimov`, redeploy there, and use the public
-[testnet faucet](https://testnet-faucet.genlayer.foundation/), which funds any address.)
+## Verify
 
-## Ship to Vercel via GitHub
+```bash
+npx tsc --noEmit --incremental false
+npm run build
+```
 
-1. Push this repo to GitHub (`.env.local` is gitignored — secrets stay out).
-2. Import the repo in Vercel (framework auto-detected as Next.js).
-3. Add the env vars above in **Project → Settings → Environment Variables**.
-4. Deploy with the default settings.
+For contract checks:
 
-## Project structure
+```bash
+pip install -r requirements-contract.txt
+genvm-lint check contracts/prediction_market_lm.py
+python -m pytest tests/direct/test_prediction_market_lm.py -q
+```
+
+## Project Structure
 
 ```text
 app/
-  api/wallet/[address]/route.ts   # server-side Zerion fetch (key stays private)
   layout.tsx  page.tsx  providers.tsx  globals.css
 components/
-  crypto-copilot.tsx              # the minimal chat UI
+  crypto-copilot.tsx       # GenBetLM product workspace
   missing-setup.tsx
 contracts/
-  chatbot.py                      # the GenLayer brain
-  prediction_market_lm.py         # GenBetLM prediction-market contract
+  prediction_market_lm.py  # GenBetLM Intelligent Contract
+  chatbot.py               # legacy copilot contract
 docs/
   genbetlm.md
 lib/
-  genlayer-client.ts             # askGenLayer(): connect → write → wait → read
-  chains.ts                      # studionet as a viem chain for Privy
-  zerion.ts  types.ts  format.ts
+  chains.ts  format.ts  genlayer-client.ts  zerion.ts
 scripts/
   deploy-genlayer.ts
 ```
-
-## Docs used
-
-- [GenLayer JS SDK](https://docs.genlayer.com/api-references/genlayer-js) · [Equivalence Principle](https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle) · [Deploying](https://docs.genlayer.com/developers/intelligent-contracts/deploying)
-- [Privy React setup](https://docs.privy.io/basics/react/setup) · [Ethereum provider](https://docs.privy.io/wallets/using-wallets/ethereum/ethereum-provider)
-- [Zerion auth](https://developers.zerion.io/authentication) · [Wallet portfolio](https://developers.zerion.io/api-reference/wallets/get-wallet-portfolio)

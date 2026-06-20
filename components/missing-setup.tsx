@@ -1,4 +1,4 @@
-import { GitBranch, KeyRound, ShieldCheck, WalletCards } from "lucide-react";
+import { FileSearch, GitBranch, ShieldCheck, WalletCards } from "lucide-react";
 import { VerdictLogo } from "@/components/verdict-logo";
 
 export function MissingSetup() {
@@ -7,34 +7,33 @@ export function MissingSetup() {
       <section className="setup-panel">
         <span className="elsa-kicker">
           <VerdictLogo size={15} />
-          VERDICT · GenLayer Copilot
+          GENBETLM / PRIVY CONNECT
         </span>
-        <h1>Welcome to Verdict — crypto answers settled by GenLayer</h1>
+        <h1>GenBetLM Web3 market workspace</h1>
         <p>
-          Add <code>NEXT_PUBLIC_PRIVY_APP_ID</code> locally or in Vercel to enable the Privy wallet
-          login, embedded wallets, and chat. Each message is a GenLayer transaction the user approves
-          in their wallet; the Zerion key stays server-side so the GitHub repo is safe to deploy.
+          Add <code>NEXT_PUBLIC_PRIVY_APP_ID</code> locally or in Vercel to enable Privy wallet
+          login, embedded wallets, market creation, and signed Web3 actions.
         </p>
         <div className="setup-grid">
           <div className="setup-item">
             <WalletCards size={18} aria-hidden="true" />
             <strong>Privy Wallet</strong>
-            <span>Email, Google, or external wallets — with an embedded EVM wallet to sign with.</span>
+            <span>Email, Google, external wallets, and embedded EVM wallets.</span>
           </div>
           <div className="setup-item">
-            <KeyRound size={18} aria-hidden="true" />
-            <strong>Zerion API</strong>
-            <span>Server env var powers the live portfolio context for each question.</span>
+            <FileSearch size={18} aria-hidden="true" />
+            <strong>Market Sources</strong>
+            <span>Public URLs back each market draft, forecast, and settlement.</span>
           </div>
           <div className="setup-item">
             <ShieldCheck size={18} aria-hidden="true" />
-            <strong>GenLayer brain</strong>
-            <span>An Intelligent Contract answers under validator consensus, one tx per message.</span>
+            <strong>GenBetLM</strong>
+            <span>An Intelligent Contract drafts, forecasts, and resolves markets.</span>
           </div>
           <div className="setup-item">
             <GitBranch size={18} aria-hidden="true" />
-            <strong>Vercel</strong>
-            <span>Push to GitHub, import in Vercel, add env vars, deploy.</span>
+            <strong>GitHub Deploy</strong>
+            <span>Push, import in Vercel, add env vars, and ship.</span>
           </div>
         </div>
       </section>

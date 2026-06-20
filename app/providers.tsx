@@ -17,8 +17,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       clientId={clientId}
       config={{
         loginMethods: ["email", "wallet", "google"],
-        // Register GenLayer studionet so the wallet can switch to chain 61999
-        // when each chat message is sent as a GenLayer transaction.
+        // Register GenLayer studionet so wallet actions can switch to chain 61999.
         defaultChain: genLayerStudionet,
         supportedChains: [genLayerStudionet],
         embeddedWallets: {

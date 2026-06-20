@@ -3,9 +3,9 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Verdict — GenLayer crypto copilot",
+  title: "GenBetLM - Web3 prediction markets",
   description:
-    "Verdict is a crypto-native chatbot where every answer is settled by GenLayer validator consensus. Powered by Privy and Zerion."
+    "GenBetLM is a Privy-connected Web3 prediction market product powered by GenLayer-native market drafting, forecasting, and settlement."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
